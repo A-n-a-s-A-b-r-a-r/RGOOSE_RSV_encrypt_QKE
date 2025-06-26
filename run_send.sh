@@ -1,0 +1,1 @@
+python3 ied_send.py sample.sed eth0 S1_IED22
