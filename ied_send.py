@@ -10,7 +10,7 @@ from parse_sed import *
 import time
 import os
 
-from compression_encryption import compress_data, encrypt_aes_gcm, decrypt_aes_gcm, key, generate_hmac_cryptography
+from compression_encryption import compress_data, encrypt_aes_gcm, decrypt_aes_gcm, generate_hmac_cryptography, initialise_key
 
 HEADER_LENGTH = 18  # Length of the PDU header (example)
 NONCE_SIZE = 12  # Nonce size for AES-GCM in bytes
@@ -88,6 +88,8 @@ def main(argv):
     # Keep looping to send multicast messages
     s = set()
     s_value = 0
+    initialise_key()
+    
     while True:
         time.sleep(1)  # in seconds
         # Initialize crypto
@@ -193,8 +195,7 @@ def main(argv):
             start_time = time.time()*1000
             payload = (compress_data(bytes(payload)))
             payload = (encrypt_aes_gcm(bytes(payload)))
-
-
+            
             udp_data.extend(payload)
 
             # Signature Tag = 0x85                
@@ -204,7 +205,7 @@ def main(argv):
             udp_data.append(0x20)
 
             t1  = time.time()
-            udp_data.extend(generate_hmac_cryptography(key, udp_data))
+            udp_data.extend(generate_hmac_cryptography(udp_data))
             t2  = time.time()
             print("Mac generation time : ", t2-t1)
 

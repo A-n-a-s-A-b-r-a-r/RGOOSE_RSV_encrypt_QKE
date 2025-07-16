@@ -8,7 +8,7 @@ from datetime import datetime
 
 import netifaces
 
-from compression_encryption import decrypt_aes_gcm, decompress_data, encrypt_aes_gcm, key, generate_hmac_cryptography
+from compression_encryption import decrypt_aes_gcm, decompress_data, encrypt_aes_gcm, generate_hmac_cryptography
 from ied_utils import getIPv4Add
 from parse_sed import parse_sed
 
@@ -494,7 +494,7 @@ def main():
             # With certificateless crypto, we rely on AES-GCM's authentication
             # You can still verify a separate HMAC if needed
             t1 = time.time()
-            mac = generate_hmac_cryptography(key, list(data[:-32]))
+            mac = generate_hmac_cryptography( list(data[:-32]))
             t2 = time.time()
             print(f"{t2-t1:.6f} mac generation time")
 
