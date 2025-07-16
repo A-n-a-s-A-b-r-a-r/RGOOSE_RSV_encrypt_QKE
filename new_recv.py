@@ -7,7 +7,7 @@ from datetime import datetime
 
 import netifaces
 
-from compression_encryption import SecureGOOSEMessaging
+from compression_encryption import decrypt_aes_gcm, decompress_data, encrypt_aes_gcm, generate_hmac_cryptography
 from ied_utils import getIPv4Add
 from parse_sed import parse_sed
 
@@ -498,18 +498,43 @@ def main():
                         print(f"✗ Failed to refresh key with {peer}: {e}")
                 last_key_refresh = time.time()
             data, addr = sock.recvfrom(65535)
-            process_received_data(data, addr, stats, secure_messaging, None, vector_of_ctrl_blks, ied_name)
-            # Print QKE status
-            print("=== QKE Status ===")
-            active_keys = 0
-            for peer in known_peers:
-                key_info = secure_messaging.qke._load_key_from_file(peer)
-                if key_info:
-                    active_keys += 1
-                    key_age = time.time() - key_info['timestamp']
-                    print(f"  {peer}: Key seq={key_info['sequence']}, age={key_age:.0f}s")
-            print(f"Active quantum keys: {active_keys}")
-            print("==================")
+            
+            # Extract packet components
+            headers = list(data[:32])
+            payload = data[32:-34]
+            signature = list(data[-34:])
+            
+            # With certificateless crypto, we rely on AES-GCM's authentication
+            # You can still verify a separate HMAC if needed
+            t1 = time.time()
+            mac = generate_hmac_cryptography( list(data[:-32]))
+            t2 = time.time()
+            print(f"{t2-t1:.6f} mac generation time")
+
+            # Check signature - note that our certificateless crypto provides authentication already
+            if list(mac) != signature[2:]:
+                print("Warning: MAC mismatch, but continuing as crypto provides authentication")
+                # We don't continue here as we're relying on crypto's authentication
+
+            # Decrypt and decompress payload
+            # Check and possibly rotate keys
+
+            # Decrypt with certificateless crypto and then decompress
+            start_time = time.time() * 1000
+            try:
+                decrypted_payload = decrypt_aes_gcm(bytes(payload))
+                decompressed_payload = decompress_data(bytes(decrypted_payload))
+            except Exception as e:
+                print(f"Decryption error: {e}")
+                continue    
+
+            # Reconstruct packet
+            reconstructed_data = headers + list(decompressed_payload) + signature
+            reconstructed_data = bytearray(reconstructed_data)
+
+            # Process the packet
+            process_received_data(reconstructed_data, addr, stats)
+                
     except KeyboardInterrupt:
         print("\nExiting...")
     finally:

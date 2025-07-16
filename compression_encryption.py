@@ -1,14 +1,15 @@
-import zlib
-import os
-import time
-import hashlib
-import secrets
-from typing import Tuple, List, Optional
+import zlib, os
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.hmac import HMAC
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from QKE import BB84Simulator
+
+HEADER_LENGTH = 18  # Length of the PDU header (example)
+NONCE_SIZE = 12  # Nonce size for AES-GCM in bytes
+TAG_SIZE = 16  # Tag size for AES-GCM in bytes
+AES_KEY_SIZE = 32  # AES-256 key size in bytes
+KEY_FILE_PATH = "encryption_key.bin"  # Path to store the key file
 
 HEADER_LENGTH = 18
 NONCE_SIZE = 12
@@ -187,132 +188,65 @@ class QuantumKeyExchange:
         """Refresh the quantum key with a peer"""
         return self.establish_quantum_key(peer_id)
 
-class SecureGOOSEMessaging:
-    """
-    Enhanced GOOSE/RSV messaging with QKE
-    """
-    
-    def __init__(self, node_id: str):
-        self.node_id = node_id
-        self.qke = QuantumKeyExchange(node_id)
-        self.key_refresh_interval = 3600  # 1 hour
-        self.last_key_refresh = {}
-        
-    def ensure_quantum_key(self, peer_id: str) -> bytes:
-        """
-        Ensure we have a valid quantum key for the peer
-        """
-        current_time = time.time()
-        
-        if (peer_id not in self.last_key_refresh or 
-            current_time - self.last_key_refresh[peer_id] > self.key_refresh_interval):
-            
-            key = self.qke.establish_quantum_key(peer_id)
-            self.last_key_refresh[peer_id] = current_time
-            return key
-        
-        return self.qke.get_current_key(peer_id)
-    
-    def compress_data(self, data: bytes) -> bytes:
-        return zlib.compress(data)
-    
-    def decompress_data(self, data: bytes) -> bytes:
-        return zlib.decompress(data)
-    
-    def encrypt_message(self, plaintext: bytes, peer_id: str) -> bytes:
-        """
-        Encrypt message using quantum-derived key
-        """
-        quantum_key = self.ensure_quantum_key(peer_id)
-        nonce = os.urandom(NONCE_SIZE)
-        cipher = Cipher(algorithms.AES(quantum_key), modes.GCM(nonce))
-        encryptor = cipher.encryptor()
-        ciphertext = encryptor.update(plaintext) + encryptor.finalize()
-        return nonce + ciphertext + encryptor.tag
-    
-    def decrypt_message(self, ciphertext_with_nonce_and_tag: bytes, 
-                       peer_id: str) -> bytes:
-        """
-        Decrypt message using quantum-derived key
-        """
-        quantum_key = self.qke.get_current_key(peer_id)
-        if not quantum_key:
-            raise ValueError(f"No quantum key available for peer {peer_id}")
-        
-        nonce = ciphertext_with_nonce_and_tag[:NONCE_SIZE]
-        ciphertext = ciphertext_with_nonce_and_tag[NONCE_SIZE:-TAG_SIZE]
-        tag = ciphertext_with_nonce_and_tag[-TAG_SIZE:]
-        
-        cipher = Cipher(algorithms.AES(quantum_key), modes.GCM(nonce, tag))
-        decryptor = cipher.decryptor()
-        plaintext = decryptor.update(ciphertext) + decryptor.finalize()
-        return plaintext
-    
-    def generate_quantum_hmac(self, message: bytes, peer_id: str) -> bytes:
-        """
-        Generate HMAC using quantum key
-        """
-        quantum_key = self.qke.get_current_key(peer_id)
-        if not quantum_key:
-            raise ValueError(f"No quantum key available for peer {peer_id}")
-        
-        h = HMAC(quantum_key, hashes.SHA256(), backend=default_backend())
-        h.update(message)
-        return h.finalize()
-    
-    def process_goose_message(self, message_data: bytes, peer_id: str, 
-                            encrypt: bool = True) -> bytes:
-        """
-        Process GOOSE message with optional encryption
-        """
-        compressed = self.compress_data(message_data)
-        if encrypt:
-            encrypted = self.encrypt_message(compressed, peer_id)
-            hmac_tag = self.generate_quantum_hmac(encrypted, peer_id)
-            return encrypted + hmac_tag
-        else:
-            return compressed
-    
-    def receive_goose_message(self, received_data: bytes, peer_id: str, 
-                            encrypted: bool = True) -> bytes:
-        """
-        Receive and process GOOSE message
-        """
-        if encrypted:
-            hmac_tag = received_data[-32:]
-            encrypted_data = received_data[:-32]
-            
-            expected_hmac = self.generate_quantum_hmac(encrypted_data, peer_id)
-            if hmac_tag != expected_hmac:
-                raise ValueError("HMAC verification failed")
-            
-            decrypted = self.decrypt_message(encrypted_data, peer_id)
-            return self.decompress_data(decrypted)
-        else:
-            return self.decompress_data(received_data)
+def save_key_to_file(key: bytes, filepath: str = KEY_FILE_PATH):
+    """Save the encryption key to a file"""
+    with open(filepath, 'wb') as f:
+        f.write(key)
 
-# Example usage
-if __name__ == "__main__":
-    node_a = SecureGOOSEMessaging("SubstationA")
-    node_b = SecureGOOSEMessaging("SubstationB")
-    
-    test_message = b"GOOSE message: Breaker status change - CB01 OPEN"
-    
-    print("=== Quantum Key Exchange Demo ===")
-    
-    encrypted_message = node_a.process_goose_message(test_message, "SubstationB")
-    print(f"Encrypted message length: {len(encrypted_message)} bytes")
-    
-    # Copy key file for demo purposes
-    import shutil
-    key_file_a = node_a.qke._get_key_file_path("SubstationB")
-    key_file_b = node_b.qke._get_key_file_path("SubstationA")
-    if os.path.exists(key_file_a):
-        shutil.copy(key_file_a, key_file_b)
-    
+def load_key_from_file(filepath: str = KEY_FILE_PATH) -> bytes:
+    """Load the encryption key from a file"""
     try:
-        decrypted_message = node_b.receive_goose_message(encrypted_message, "SubstationA")
-        print(f"Decrypted message: {decrypted_message.decode()}")
-        print("✓ Quantum-secured communication successful!")
-    except Exception as e:
-        print(f"✗ Error: {e}")
+        with open(filepath, 'rb') as f:
+            return f.read()
+    except FileNotFoundError:
+        # If key file doesn't exist, use the default key and save it
+        default_key = b'\xe3\x1e\xc3G\x8f\x98|\x15u\xf3`\xf2\xdc7\xe1 \x00\xdc\x1a\x85\t6B\x13\x8d\xcd\xfcu\xcd\x08{A'
+        save_key_to_file(default_key, filepath)
+        return default_key
+
+def encrypt_aes_gcm(plaintext: bytes) -> bytes:
+    key = load_key_from_file()
+    nonce = os.urandom(NONCE_SIZE)
+    cipher = Cipher(algorithms.AES(key), modes.GCM(nonce))
+    encryptor = cipher.encryptor()
+    ciphertext = encryptor.update(plaintext) + encryptor.finalize()
+    return nonce + ciphertext + encryptor.tag
+
+def decrypt_aes_gcm(ciphertext_with_nonce_and_tag: bytes) -> bytes:
+    key = load_key_from_file()
+    nonce = ciphertext_with_nonce_and_tag[:NONCE_SIZE]
+    ciphertext = ciphertext_with_nonce_and_tag[NONCE_SIZE:-TAG_SIZE]
+    tag = ciphertext_with_nonce_and_tag[-TAG_SIZE:]
+    cipher = Cipher(algorithms.AES(key), modes.GCM(nonce, tag))
+    decryptor = cipher.decryptor()
+    plaintext = decryptor.update(ciphertext) + decryptor.finalize()
+    return plaintext
+
+def generate_hmac_cryptography(message):
+    """Generate HMAC using the key from file"""
+    key = load_key_from_file()
+    h = HMAC(key, hashes.SHA256(), backend=default_backend())
+    h.update(bytes(message))  # Convert list of integers to bytes
+    return h.finalize()  # Return raw bytes (not hex)
+
+def initialise_key():
+    """Initialize key using BB84 simulator and save to file"""
+    simulator1 = BB84Simulator()
+    alice_key1, bob_key1, error_rate1 = simulator1.run_bb84(256, with_eavesdropper=False)  # Generate 256 bits
+    
+    # Convert bits to bytes properly
+    key_bits = alice_key1[:256]  # Ensure exactly 256 bits
+    key = int(''.join(map(str, key_bits)), 2).to_bytes(32, 'big')
+    
+    # Save the key to file
+    save_key_to_file(key)
+    print(f"Initialised key: {key}")
+    print(f"Key saved to: {KEY_FILE_PATH}")
+
+def delete_key_file(filepath: str = KEY_FILE_PATH):
+    """Delete the key file (useful for cleanup or key rotation)"""
+    try:
+        os.remove(filepath)
+        print(f"Key file {filepath} deleted successfully")
+    except FileNotFoundError:
+        print(f"Key file {filepath} not found")

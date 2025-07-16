@@ -8,7 +8,7 @@ from udpSock import *
 from zz_diagnose import *
 from parse_sed import *
 
-from compression_encryption import SecureGOOSEMessaging
+from compression_encryption import compress_data, encrypt_aes_gcm, decrypt_aes_gcm, generate_hmac_cryptography, initialise_key
 
 HEADER_LENGTH = 18  # Length of the PDU header
 NONCE_SIZE = 12  # Nonce size for AES-GCM in bytes
@@ -114,8 +114,7 @@ def main(argv):
     
     # Keep looping to send multicast messages
     s_value = 0
-    last_key_refresh = time.time()
-    key_refresh_interval = 1800  # 30 minutes
+    initialise_key()
     
     while True:
         time.sleep(1)  # in seconds
@@ -218,66 +217,22 @@ def main(argv):
             print(len(udp_data))
             print("Payload length before encryption/compression", len(payload))
 
-            start_time = time.time() * 1000
+            start_time = time.time()*1000
+            payload = (compress_data(bytes(payload)))
+            payload = (encrypt_aes_gcm(bytes(payload)))
             
-            try:
-                if target_peer:
-                    print(f"Using QKE encryption for peer: {target_peer}")
-                    encrypted_payload = secure_messaging.process_goose_message(
-                        bytes(payload), target_peer, encrypt=True
-                    )
-                else:
-                    print("Using QKE compression only (broadcast)")
-                    encrypted_payload = secure_messaging.process_goose_message(
-                        bytes(payload), "", encrypt=False
-                    )
-                
-                payload = list(encrypted_payload)
-                
-            except Exception as e:
-                print(f"✗ QKE encryption failed, using fallback: {e}")
-                payload = list(secure_messaging.compress_data(bytes(payload)))
-            
-            end_time = time.time() * 1000
-            encryption_time = end_time - start_time
-            print(f"QKE encryption time: {encryption_time:.2f}ms")
-
             udp_data.extend(payload)
 
-            udp_data.append(0x85)  # Signature Tag
-            udp_data.append(0x20)  # Length of HMAC
-
-            t1 = time.time()
-            try:
-                if target_peer:
-                    hmac_data = secure_messaging.generate_quantum_hmac(
-                        bytes(udp_data), target_peer
-                    )
-                else:
-                    # Fallback to a random key for HMAC
-                    from cryptography.hazmat.primitives.hmac import HMAC
-                    from cryptography.hazmat.primitives import hashes
-                    from cryptography.hazmat.backends import default_backend
-                    fallback_key = os.urandom(AES_KEY_SIZE)
-                    h = HMAC(fallback_key, hashes.SHA256(), backend=default_backend())
-                    h.update(bytes(udp_data))
-                    hmac_data = h.finalize()
-                
-                udp_data.extend(hmac_data)
-                
-            except Exception as e:
-                print(f"✗ QKE HMAC failed, using fallback: {e}")
-                from cryptography.hazmat.primitives.hmac import HMAC
-                from cryptography.hazmat.primitives import hashes
-                from cryptography.hazmat.backends import default_backend
-                fallback_key = os.urandom(AES_KEY_SIZE)
-                h = HMAC(fallback_key, hashes.SHA256(), backend=default_backend())
-                h.update(bytes(udp_data))
-                hmac_data = h.finalize()
-                udp_data.extend(hmac_data)
+            # Signature Tag = 0x85                
+            udp_data.append(0x85)
             
-            t2 = time.time()
-            print("QKE HMAC generation time:", t2 - t1)
+            # Length of HMAC 
+            udp_data.append(0x20)
+
+            t1  = time.time()
+            udp_data.extend(generate_hmac_cryptography(udp_data))
+            t2  = time.time()
+            print("Mac generation time : ", t2-t1)
 
             sock = UdpSock()
             diagnose(sock.is_good(), "Opening datagram socket for send")
